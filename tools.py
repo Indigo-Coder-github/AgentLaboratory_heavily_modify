@@ -1,21 +1,21 @@
-from utils import *
-
+import concurrent.futures
+import io
+import os
+import re
+import sys
 import time
-import arxiv
-import os, re
-import io, sys
-import numpy as np
-import concurrent.futures
-from pypdf import PdfReader
-from datasets import load_dataset
-from psutil._common import bytes2human
-from datasets import load_dataset_builder
-from semanticscholar import SemanticScholar
-from sklearn.metrics.pairwise import linear_kernel
-from sklearn.feature_extraction.text import TfidfVectorizer
-
 import traceback
-import concurrent.futures
+
+import arxiv
+import numpy as np
+from datasets import load_dataset, load_dataset_builder
+from psutil._common import bytes2human
+from pypdf import PdfReader
+from semanticscholar import SemanticScholar
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import linear_kernel
+
+from utils import *
 
 
 class HFDataSearch:
@@ -332,19 +332,9 @@ def execute_code(code_str, timeout=180):
 
 """
 
-import io
-import sys
-import traceback
 import concurrent.futures
-
-
-
-import multiprocessing
 import io
-import sys
-import traceback
 import multiprocessing
-import io
 import sys
 import traceback
 

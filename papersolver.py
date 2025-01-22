@@ -1,17 +1,18 @@
+import os
 import random
 import string
-from utils import *
-from tools import *
-from copy import copy
-from inference import *
-from pathlib import Path
-from copy import deepcopy
-from common_imports import *
-from agents import get_score
+import sys
 from abc import abstractmethod
-
 from contextlib import contextmanager
-import sys, os
+from copy import copy, deepcopy
+from pathlib import Path
+import subprocess
+
+from agents import get_score
+from inference import *
+from tools import *
+from utils import *
+
 
 @contextmanager
 def suppress_stdout():
@@ -42,11 +43,41 @@ class Command:
     @abstractmethod
     def parse_command(self, cmd_str) -> tuple:
         pass
+    
+    def compile_latex(self, latex_code, compile=True, output_filename="output.pdf", timeout=30):
+        latex_code = latex_code.replace(
+            r"\documentclass{article}",
+            "\\documentclass{article}\n\\usepackage{amsmath}\n\\usepackage{amssymb}\n\\usepackage{array}\n\\usepackage{algorithm}\n\\usepackage{algorithmicx}\n\\usepackage{algpseudocode}\n\\usepackage{booktabs}\n\\usepackage{colortbl}\n\\usepackage{color}\n\\usepackage{enumitem}\n\\usepackage{fontawesome5}\n\\usepackage{float}\n\\usepackage{graphicx}\n\\usepackage{hyperref}\n\\usepackage{listings}\n\\usepackage{makecell}\n\\usepackage{multicol}\n\\usepackage{multirow}\n\\usepackage{pgffor}\n\\usepackage{pifont}\n\\usepackage{soul}\n\\usepackage{sidecap}\n\\usepackage{subcaption}\n\\usepackage{titletoc}\n\\usepackage[symbol]{footmisc}\n\\usepackage{url}\n\\usepackage{wrapfig}\n\\usepackage{xcolor}\n\\usepackage{xspace}")
+        #print(latex_code)
+        dir_path = "research_dir/tex"
+        tex_file_path = os.path.join(dir_path, "temp.tex")
+        # Write the LaTeX code to the .tex file in the specified directory
+        with open(tex_file_path, "w") as f:
+            f.write(latex_code)
 
+        if not compile:
+            return f"Compilation successful"
 
-def execute_latex():
-    return True
+        # Compiling the LaTeX code using pdflatex with non-interactive mode and timeout
+        try:
+            result = subprocess.run(
+                ["pdflatex", "-interaction=nonstopmode", "temp.tex"],
+                check=True,                   # Raises a CalledProcessError on non-zero exit codes
+                stdout=subprocess.PIPE,        # Capture standard output
+                stderr=subprocess.PIPE,        # Capture standard error
+                timeout=timeout,               # Timeout for the process
+                cwd=dir_path
+            )
 
+            # If compilation is successful, return the success message
+            return f"Compilation successful: {result.stdout.decode('utf-8')}"
+
+        except subprocess.TimeoutExpired:
+            # If the compilation takes too long, return a timeout message
+            return "[CODE EXECUTION ERROR]: Compilation timed out after {} seconds".format(timeout)
+        except subprocess.CalledProcessError as e:
+            # If there is an error during LaTeX compilation, return the error message
+            return f"[CODE EXECUTION ERROR]: Compilation failed: {e.stderr.decode('utf-8')} {e.output.decode('utf-8')}. There was an error in your latex."
 
 """
 @@@@@@@@@@@@@@@@@@
@@ -77,12 +108,11 @@ class Arxiv(Command):
             return self.arxiv_eng.find_papers_by_str(args[1], self.num_papers_per_search)
         elif args[0] == "FULL_TEXT":
             return self.arxiv_eng.retrieve_full_paper_text(args[1])
-        raise Exception("Invalid Arxiv Search")
+        else: Exception("Invalid Arxiv Search")
 
     def matches_command(self, cmd_str) -> bool:
-        if "```SUMMARY" in cmd_str: return True
-        elif "```FULL_TEXT" in cmd_str: return True
-        return False
+        if "```SUMMARY" in cmd_str or "```FULL_TEXT" in cmd_str: return True
+        else: return False
 
     def parse_command(self, *args) -> tuple:
         sum_text = extract_prompt(args[0], "SUMMARY").split("\n")
@@ -122,10 +152,9 @@ class PaperReplace(Command):
 
     def parse_command(self, *args) -> tuple:
         new_latex = extract_prompt(args[0], "REPLACE")
-        latex_ret = compile_latex(new_latex, compile=args[1])
+        latex_ret = super().compile_latex(new_latex, compile=args[1])
         if "[CODE EXECUTION ERROR]" in latex_ret: return False, (None, latex_ret,)
         return True, (new_latex.split("\n"), latex_ret)
-
 
 
 class PaperEdit(Command):
@@ -157,7 +186,7 @@ class PaperEdit(Command):
                 current_latex.insert(args[0], _line)
             new_latex = "\n".join(current_latex)
             latex_exec = f"{new_latex}"
-            latex_ret = compile_latex(latex_exec, compile=args[4])
+            latex_ret = super().compile_latex(latex_exec, compile=args[4])
             if "error" in latex_ret.lower(): return (False, None, latex_ret)
             return (True, current_latex, latex_ret)
         except Exception as e:
@@ -180,7 +209,6 @@ class PaperEdit(Command):
             return success, (lines_to_edit[0], lines_to_edit[1], latexlines, text[1:])
         except Exception as e:
             return False, (None, None, None, None)
-
 
 
 
@@ -271,6 +299,7 @@ class PaperSolver:
         self.prev_paper_ret = str()
         self.section_related_work = {}
         self.openai_api_key = openai_api_key
+        self.phase_prompt = "You are a PhD student who has submitted their paper to an ML conference called ICLR. Your goal was to write a research paper and get high scores from the reviewers so that it get accepted to the conference.\n"
 
     def solve(self):
         num_attempts = 0
@@ -286,7 +315,7 @@ class PaperSolver:
                 temp=1.0,
                 openai_api_key=self.openai_api_key)
             #print(model_resp)
-            model_resp = self.clean_text(model_resp)
+            model_resp = model_resp.replace("```\n", "```")
             cmd_str, paper_lines, prev_paper_ret, score = self.process_command(model_resp)
             if score is not None:
                 if top_score is None:
@@ -329,11 +358,6 @@ class PaperSolver:
         self.commands = [PaperEdit()] #, Replace()]
         self.prev_working_report = copy(self.paper_lines)
 
-    @staticmethod
-    def clean_text(text):
-        text = text.replace("```\n", "```")
-        return text
-
     def gen_initial_report(self):
         num_attempts = 0
         arx = ArxivSearch()
@@ -375,7 +399,7 @@ class PaperSolver:
                     prompt=f"{prompt}",
                     temp=0.8,
                     openai_api_key=self.openai_api_key)
-                model_resp = self.clean_text(model_resp)
+                model_resp = model_resp.replace("```\n", "```")
                 if _section == "scaffold":
                     # minimal scaffold (some other sections can be combined)
                     for _sect in ["[ABSTRACT HERE]", "[INTRODUCTION HERE]", "[METHODS HERE]", "[RESULTS HERE]", "[DISCUSSION HERE]"]:
@@ -403,7 +427,7 @@ class PaperSolver:
         print("$"*10, "SCAFFOLD CREATED", "$"*10)
         return latex_lines, prev_latex_ret, score
 
-    def process_command(self, model_resp, scoring=True):
+    def process_command(self, model_resp: str, scoring=True) -> tuple[str, list[str], str, float]:
         """
         Take command from language model and execute if valid
         @param model_resp: (str) language model output
@@ -533,7 +557,7 @@ class PaperSolver:
             # ROLE DESCRIPTION
             f"{self.role_description()}.\n"
             # TASK INSTRUCTIONS
-            f"The following are your task instructions: {self.phase_prompt()}\n"
+            f"The following are your task instructions: {self.phase_prompt}\n"
             # NOTES
             f"The following are notes, instructions, and general tips for you: {self.notes}"
             # LIT REVIEW
@@ -571,17 +595,4 @@ class PaperSolver:
         @return: (str) role description
         """
         return "You are a computer science PhD student at a top university who has submitted their paper to an ML conference called ICLR. Your goal was to write a research paper and get high scores from the reviewers so that it get accepted to the conference. Your paper should be approximately 8 pages and around 4000 words. Your article should ONLY CONTAIN EIGHT sections as follows: 1. Abstract 2. Introduction, 3. Background, 4. Related Work 5. Methods, 6. Experimental Setup 7. Results, and 8. Discussion.\n"
-
-
-    def phase_prompt(self,):
-        """
-        Describe system role and general tips for mle-solver
-        @return: (str) system role
-        """
-        phase_str = (
-            "You are a PhD student who has submitted their paper to an ML conference called ICLR. Your goal was to write a research paper and get high scores from the reviewers so that it get accepted to the conference.\n"
-        )
-        return phase_str
-
-
 

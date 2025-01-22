@@ -1,4 +1,4 @@
-from utils import *
+from utils import Util
 from tools import *
 from inference import *
 
@@ -33,7 +33,6 @@ def extract_json_between_markers(llm_output):
 
 
 def get_score(outlined_plan, latex, reward_model_llm, reviewer_type=None, attempts=3, openai_api_key=None):
-    e = str()
     for _attempt in range(attempts):
         try:
             # todo: have a reward function here

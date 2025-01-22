@@ -1,17 +1,20 @@
-from agents import *
-from copy import copy
-from common_imports import *
-from mlesolver import MLESolver
-from torch.backends.mkl import verbose
-
 import argparse
 import pickle
+from copy import copy
+
+from torch.backends.mkl import verbose
+
+from agents import *
+from mlesolver import MLESolver
+from papersolver import PaperSolver
 
 DEFAULT_LLM_BACKBONE = "o1-mini"
 
 
 class LaboratoryWorkflow:
-    def __init__(self, research_topic, openai_api_key, max_steps=100, num_papers_lit_review=5, agent_model_backbone=f"{DEFAULT_LLM_BACKBONE}", notes=list(), human_in_loop_flag=None, compile_pdf=True, mlesolver_max_steps=3, papersolver_max_steps=5):
+    def __init__(self, research_topic: str, openai_api_key, max_steps=100, num_papers_lit_review=5,
+                 agent_model_backbone=f"{DEFAULT_LLM_BACKBONE}",notes=list(), human_in_loop_flag=None,
+                 compile_pdf=True, mlesolver_max_steps=3, papersolver_max_steps=5):
         """
         Initialize laboratory workflow
         @param research_topic: (str) description of research idea to explore
@@ -100,7 +103,7 @@ class LaboratoryWorkflow:
         self.set_agent_attr("model", model)
         self.reviewers.model = model
 
-    def save_state(self, phase):
+    def save_state(self, phase: str):
         """
         Save state for phase
         @param phase: (str) phase string
@@ -150,30 +153,22 @@ class LaboratoryWorkflow:
                     else: self.set_model(f"{DEFAULT_LLM_BACKBONE}")
                 if (subtask not in self.phase_status or not self.phase_status[subtask]) and subtask == "literature review":
                     repeat = True
-                    while repeat: repeat = self.literature_review()
+                    match subtask:
+                        case "literature review":
+                            while repeat: repeat = self.literature_review()
+                        case "plan formulation":
+                            while repeat: repeat = self.plan_formulation()
+                        case "data preparation":
+                            while repeat: repeat = self.data_preparation()
+                        case "running experiments":
+                            while repeat: repeat = self.running_experiments()
+                        case "results interpretation":
+                            while repeat: repeat = self.results_interpretation()
+                        case "report writing":
+                            while repeat: repeat = self.report_writing()
+                        case "report refinement":
+                            return_to_exp_phase = self.report_refinement()
                     self.phase_status[subtask] = True
-                if (subtask not in self.phase_status or not self.phase_status[subtask]) and subtask == "plan formulation":
-                    repeat = True
-                    while repeat: repeat = self.plan_formulation()
-                    self.phase_status[subtask] = True
-                if (subtask not in self.phase_status or not self.phase_status[subtask]) and subtask == "data preparation":
-                    repeat = True
-                    while repeat: repeat = self.data_preparation()
-                    self.phase_status[subtask] = True
-                if (subtask not in self.phase_status or not self.phase_status[subtask]) and subtask == "running experiments":
-                    repeat = True
-                    while repeat: repeat = self.running_experiments()
-                    self.phase_status[subtask] = True
-                if (subtask not in self.phase_status or not self.phase_status[subtask]) and subtask == "results interpretation":
-                    repeat = True
-                    while repeat: repeat = self.results_interpretation()
-                    self.phase_status[subtask] = True
-                if (subtask not in self.phase_status or not self.phase_status[subtask]) and subtask == "report writing":
-                    repeat = True
-                    while repeat: repeat = self.report_writing()
-                    self.phase_status[subtask] = True
-                if (subtask not in self.phase_status or not self.phase_status[subtask]) and subtask == "report refinement":
-                    return_to_exp_phase = self.report_refinement()
 
                     if not return_to_exp_phase:
                         if self.save: self.save_state(subtask)
@@ -232,7 +227,7 @@ class LaboratoryWorkflow:
                 return True
             else: raise Exception("Model did not respond")
 
-    def report_writing(self):
+    def report_writing(self) -> bool:
         """
         Perform report writing phase
         @return: (bool) whether to repeat the phase
@@ -241,7 +236,6 @@ class LaboratoryWorkflow:
         report_notes = [_note["note"] for _note in self.ml_engineer.notes if "report writing" in _note["phases"]]
         report_notes = f"Notes for the task objective: {report_notes}\n" if len(report_notes) > 0 else ""
         # instantiate mle-solver
-        from papersolver import PaperSolver
         self.reference_papers = []
         solver = PaperSolver(notes=report_notes, max_steps=self.papersolver_max_steps, plan=lab.phd.plan, exp_code=lab.phd.results_code, exp_results=lab.phd.exp_results, insights=lab.phd.interpretation, lit_review=lab.phd.lit_review, ref_papers=self.reference_papers, topic=research_topic, openai_api_key=self.openai_api_key, llm_str=self.model_backbone["report writing"], compile_pdf=compile_pdf)
         # run initialization for solver
@@ -263,7 +257,7 @@ class LaboratoryWorkflow:
         self.reset_agents()
         return False
 
-    def results_interpretation(self):
+    def results_interpretation(self) -> bool:
         """
         Perform results interpretation phase
         @return: (bool) whether to repeat the phase
@@ -298,7 +292,7 @@ class LaboratoryWorkflow:
                 if self.verbose: print("#"*40, "\n", "PhD Dialogue:", dialogue, "#"*40, "\n")
         raise Exception("Max tries during phase: Results Interpretation")
 
-    def running_experiments(self):
+    def running_experiments(self) -> bool:
         """
         Perform running experiments phase
         @return: (bool) whether to repeat the phase
@@ -330,7 +324,7 @@ class LaboratoryWorkflow:
         self.reset_agents()
         return False
 
-    def data_preparation(self):
+    def data_preparation(self) -> bool:
         """
         Perform data preparation phase
         @return: (bool) whether to repeat the phase
@@ -400,7 +394,7 @@ class LaboratoryWorkflow:
                 ml_feedback += f"Huggingface results: {hf_res}\n"
         raise Exception("Max tries during phase: Data Preparation")
 
-    def plan_formulation(self):
+    def plan_formulation(self) -> bool:
         """
         Perform plan formulation phase
         @return: (bool) whether to repeat the phase
@@ -440,7 +434,7 @@ class LaboratoryWorkflow:
                 if self.verbose: print("#"*40, "\n", "PhD Dialogue:", dialogue, "#"*40, "\n")
         raise Exception("Max tries during phase: Plan Formulation")
 
-    def literature_review(self):
+    def literature_review(self) -> bool:
         """
         Perform literature review phase
         @return: (bool) whether to repeat the phase
@@ -497,7 +491,7 @@ class LaboratoryWorkflow:
             if self.verbose: print(resp, "\n~~~~~~~~~~~")
         raise Exception("Max tries during phase: Literature Review")
 
-    def human_in_loop(self, phase, phase_prod):
+    def human_in_loop(self, phase: str, phase_prod: str) -> bool:
         """
         Get human feedback for phase output
         @param phase: (str) current phase
@@ -506,7 +500,6 @@ class LaboratoryWorkflow:
         """
         print("\n\n\n\n\n")
         print(f"Presented is the result of the phase [{phase}]: {phase_prod}")
-        y_or_no = None
         # repeat until a valid answer is provided
         while y_or_no not in ["y", "n"]:
             y_or_no = input("\n\n\nAre you happy with the presented content? Respond Y or N: ").strip().lower()
@@ -564,7 +557,7 @@ def parse_arguments():
     )
 
     parser.add_argument(
-        '--api-key',
+        '--openai-api-key',
         type=str,
         help='Provide the OpenAI API key.'
     )
@@ -622,30 +615,31 @@ if __name__ == "__main__":
     human_mode = args.copilot_mode.lower() == "true"
     compile_pdf = args.compile_latex.lower() == "true"
     load_existing = args.load_existing.lower() == "true"
-    try:
-        num_papers_lit_review = int(args.num_papers_lit_review.lower())
-    except Exception:
-        raise Exception("args.num_papers_lit_review must be a valid integer!")
-    try:
-        papersolver_max_steps = int(args.papersolver_max_steps.lower())
-    except Exception:
-        raise Exception("args.papersolver_max_steps must be a valid integer!")
-    try:
-        mlesolver_max_steps = int(args.mlesolver_max_steps.lower())
-    except Exception:
-        raise Exception("args.papersolver_max_steps must be a valid integer!")
+    
+    num_papers_lit_review = int(args.num_papers_lit_review.lower())
+    papersolver_max_steps = int(args.papersolver_max_steps.lower())
+    mlesolver_max_steps = int(args.mlesolver_max_steps.lower())
+    
+    assert isinstance(num_papers_lit_review, int), "num_papers_lit_review must be an integer!"
+    assert isinstance(papersolver_max_steps, int), "papersolver_max_steps must be an integer!"
+    assert isinstance(mlesolver_max_steps, int), "mlesolver_max_steps must be an integer!"
 
-
-    api_key = os.getenv('OPENAI_API_KEY') or args.api_key
-    deepseek_api_key = os.getenv('DEEPSEEK_API_KEY') or args.deepseek_api_key
-    if args.api_key is not None and os.getenv('OPENAI_API_KEY') is None:
-        os.environ["OPENAI_API_KEY"] = args.api_key
-    if args.deepseek_api_key is not None and os.getenv('DEEPSEEK_API_KEY') is None:
+    if args.openai_api_key is not None:
+        openai_api_key = args.openai_api_key
+        os.environ["OPENAI_API_KEY"] = args.openai_api_key
+    elif os.getenv('OPENAI_API_KEY') is not None:
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+    else: openai_api_key = None
+    
+    if args.deepseek_api_key is not None:
+        deepseek_api_key = args.deepseek_api_key
         os.environ["DEEPSEEK_API_KEY"] = args.deepseek_api_key
-
-    if not api_key and not deepseek_api_key:
-        raise ValueError("API key must be provided via --api-key / -deepseek-api-key or the OPENAI_API_KEY / DEEPSEEK_API_KEY environment variable.")
-
+    elif os.getenv('DEEPSEEK_API_KEY') is not None:
+        deepseek_api_key = os.getenv('DEEPSEEK_API_KEY')
+    else: deepseek_api_key = None
+    
+    assert openai_api_key is not None or deepseek_api_key is not None, "API key must be provided via --openai-api-key / -deepseek-api-key or the OPENAI_API_KEY / DEEPSEEK_API_KEY environment variable."
+    
     ##########################################################
     # Research question that the agents are going to explore #
     ##########################################################
@@ -662,10 +656,10 @@ if __name__ == "__main__":
          "note": "Please use gpt-4o-mini for your experiments."},
 
         {"phases": ["running experiments"],
-         "note": f'Use the following code to inference gpt-4o-mini: \nfrom openai import OpenAI\nos.environ["OPENAI_API_KEY"] = "{api_key}"\nclient = OpenAI()\ncompletion = client.chat.completions.create(\nmodel="gpt-4o-mini-2024-07-18", messages=messages)\nanswer = completion.choices[0].message.content\n'},
+         "note": f'Use the following code to inference gpt-4o-mini: \nfrom openai import OpenAI\nos.environ["OPENAI_API_KEY"] = "{openai_api_key}"\nclient = OpenAI()\ncompletion = client.chat.completions.create(\nmodel="gpt-4o-mini-2024-07-18", messages=messages)\nanswer = completion.choices[0].message.content\n'},
 
         {"phases": ["running experiments"],
-         "note": f"You have access to only gpt-4o-mini using the OpenAI API, please use the following key {api_key} but do not use too many inferences. Do not use openai.ChatCompletion.create or any openai==0.28 commands. Instead use the provided inference code."},
+         "note": f"You have access to only gpt-4o-mini using the OpenAI API, please use the following key {openai_api_key} but do not use too many inferences. Do not use openai.ChatCompletion.create or any openai==0.28 commands. Instead use the provided inference code."},
 
         {"phases": ["running experiments"],
          "note": "I would recommend using a small dataset (approximately only 100 data points) to run experiments in order to save time. Do not use much more than this unless you have to or are running the final tests."},
@@ -720,7 +714,7 @@ if __name__ == "__main__":
             notes=task_notes_LLM,
             agent_model_backbone=agent_models,
             human_in_loop_flag=human_in_loop,
-            openai_api_key=api_key,
+            openai_api_key=openai_api_key,
             compile_pdf=compile_pdf,
             num_papers_lit_review=num_papers_lit_review,
             papersolver_max_steps=papersolver_max_steps,
@@ -728,9 +722,4 @@ if __name__ == "__main__":
         )
 
     lab.perform_research()
-
-
-
-
-
 

@@ -1,17 +1,15 @@
+import os
 import random
-from copy import copy
-from copy import deepcopy
-from common_imports import *
+import sys
 from abc import abstractmethod
-
-
-from tools import *
-from inference import *
-from pathlib import Path
-
-
 from contextlib import contextmanager
-import sys, os
+from copy import copy, deepcopy
+from pathlib import Path
+from warnings import filterwarnings, simplefilter
+
+from inference import *
+from tools import *
+from utils import *
 
 @contextmanager
 def suppress_stdout():
@@ -26,9 +24,10 @@ def suppress_stdout():
 
 os.environ["JOBLIB_VERBOSITY"] = "0"
 logging.basicConfig(level=logging.WARNING)
-warnings.filterwarnings("ignore")
-warnings.simplefilter(action='ignore', category=FutureWarning)
+filterwarnings("ignore")
+simplefilter(action='ignore', category=FutureWarning)
 import logging
+
 logging.getLogger('sklearn.model_selection').setLevel(logging.WARNING)
 
 
@@ -41,20 +40,23 @@ class Command:
 
     @abstractmethod
     def docstring(self) -> str:
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def execute_command(self, *args) -> str:
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def matches_command(self, cmd_str) -> bool:
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def parse_command(self, cmd_str) -> tuple:
-        pass
-
+        raise NotImplementedError
+    
+    @abstractmethod
+    def code_repair(self) -> str:
+        raise NotImplementedError
 
 """
 @@@@@@@@@@@@@@@@@@
@@ -90,6 +92,21 @@ class Replace(Command):
         code_ret = execute_code(code_exec)
         if "[CODE EXECUTION ERROR]" in code_ret: return False, (None, code_ret,)
         return True, (new_code.split("\n"), code_ret)
+    
+    def code_repair(code, error, REPAIR_LLM, openai_api_key=None) -> str:
+        repair_sys = (
+            "You are an automated code repair tool.\n"
+            "Your goal is to take in code and an error and repair the code to make sure the same error does not repeat itself, and also to remove any other potential errors from the code without affecting the code output.\n"
+            "Your output should match the original code as closely as possible.\n"
+            "You must wrap the code in the following ```python\n<code here>\n```\n"
+            "Do not forget the opening ```python and the closing ```."
+        )
+        model_resp = query_model(
+            openai_api_key=openai_api_key,
+            model_str=f"{REPAIR_LLM}",
+            system_prompt=repair_sys,
+            prompt=f"Provided here is the error: {error}\n\nProvided below is the code:\n\n{code}", temp=0.8)
+        return extract_prompt(model_resp, "python")
 
 
 
@@ -146,49 +163,8 @@ class Edit(Command):
             return success, (lines_to_edit[0], lines_to_edit[1], codelines, text[1:], datasetcode)
         except Exception as e:
             return False, (None, None, None, None, None)
-
-
-def get_score(outlined_plan, code, code_return, REWARD_MODEL_LLM, attempts=3, openai_api_key=None):
-    e = str()
-    for _attempt in range(attempts):
-        try:
-            # todo: have a reward function here
-            sys = (
-                f"You are a professor agent who is serving as an expert reward model that can read a research plan, research code, and code output and are able to determine how well a model followed the plan, built the code, and got the proper output scored from 0 to 1 as a float.\n\n"
-                f"You must structure your score exactly in the following way: ```SCORE\n<score here>\n``` where SCORE is just the word score, <score here> is a floating point number between 0 and 1 representing how well the model followed the plan, built the code, and got the proper output."
-            )
-            scoring = query_model(
-                model_str=f"{REWARD_MODEL_LLM}",
-                system_prompt=sys,
-                openai_api_key=openai_api_key,
-                prompt=(
-                    f"Outlined in the following text is the research plan that the machine learning engineer was tasked with building: {outlined_plan}\n\n"
-                    f"The following text is the research code that the model produced: \n{code}\n\n"
-                    f"The following is the output from the model: {code_return}\n\n"), temp=0.6)
-            performance = extract_prompt(text=scoring, word="SCORE")
-            performance = float(performance)
-            return performance, f"The performance of your submission is: {performance}", True
-        except Exception as e:
-            return None, str(e), False
-    return 0, e
-
-
-def code_repair(code, error, ctype, REPAIR_LLM, openai_api_key=None):
-    if ctype == "replace":
-        repair_sys = (
-            "You are an automated code repair tool.\n"
-            "Your goal is to take in code and an error and repair the code to make sure the same error does not repeat itself, and also to remove any other potential errors from the code without affecting the code output.\n"
-            "Your output should match the original code as closely as possible.\n"
-            "You must wrap the code in the following ```python\n<code here>\n```\n"
-            "Do not forget the opening ```python and the closing ```."
-        )
-        model_resp = query_model(
-            openai_api_key=openai_api_key,
-            model_str=f"{REPAIR_LLM}",
-            system_prompt=repair_sys,
-            prompt=f"Provided here is the error: {error}\n\nProvided below is the code:\n\n{code}", temp=0.8)
-        return extract_prompt(model_resp, "python")
-    elif ctype == "edit":
+        
+    def code_repair(self, code, error, REPAIR_LLM, openai_api_key=None) -> str:
         repair_sys = (
             "You are an automated code repair tool.\n"
             "Your goal is to take in code and an error and repair the code to make sure the same error does not repeat itself, and also to remove any other potential errors from the code without affecting the code output.\n"
@@ -364,12 +340,12 @@ class MLESolver:
                                 code_err = f"Return from executing code: {cmd_return[2]}"
                                 if cmd_return[0]:  # if success
                                     code_lines = copy(cmd_return[1])
-                                    score, cmd_str, is_valid = get_score(self.plan, "\n".join(code_lines), cmd_return[2], openai_api_key=self.openai_api_key, REWARD_MODEL_LLM=self.llm_str)
+                                    score, cmd_str, is_valid = self.get_score(self.plan, "\n".join(code_lines), cmd_return[2], openai_api_key=self.openai_api_key, REWARD_MODEL_LLM=self.llm_str)
                                     if is_valid:
                                         failed = False
                                         break
                                     code_err += f"\nReturn from executing code on real test set {cmd_str}"
-                            repaired_code = code_repair(model_resp, code_err, REPAIR_LLM=self.llm_str, ctype="edit", openai_api_key=self.openai_api_key)
+                            repaired_code = cmd.code_repair(model_resp, code_err, REPAIR_LLM=self.llm_str, ctype="edit", openai_api_key=self.openai_api_key)
                             model_resp = repaired_code
                             print(f"     * Attempting repair // try {_tries}*")
                         if failed:
@@ -391,12 +367,12 @@ class MLESolver:
                             code_err = f"Return from executing code: {args[1]}"
                             if success:
                                 code_lines = copy(args[0])
-                                score, cmd_str, is_valid = get_score(self.plan, "\n".join(code_lines), args[1], openai_api_key=self.openai_api_key, REWARD_MODEL_LLM=self.llm_str)
+                                score, cmd_str, is_valid = self.get_score(self.plan, "\n".join(code_lines), args[1], openai_api_key=self.openai_api_key, REWARD_MODEL_LLM=self.llm_str)
                                 if is_valid:
                                     failed = False
                                     break
                                 code_err += f"\nReturn from executing code on real test set {cmd_str}"
-                            repaired_code = code_repair(extract_prompt(model_resp, "REPLACE", ), code_err, ctype="replace", openai_api_key=self.openai_api_key, REPAIR_LLM=self.llm_str)
+                            repaired_code = cmd.code_repair(extract_prompt(model_resp, "REPLACE", ), code_err, ctype="replace", openai_api_key=self.openai_api_key, REPAIR_LLM=self.llm_str)
                             repaired_code = f"```REPLACE\n{repaired_code}\n```"
                             model_resp = repaired_code
                             print(f"     * Attempting repair // try {_tries}*")
@@ -483,7 +459,7 @@ class MLESolver:
                 reflect_prompt = f"This is your code: {code_str}\n\nYour code returned the following error {code_return}. Please provide a detailed reflection on why this error was returned, which lines in the code caused this error, and exactly (line by line) how you hope to fix this in the next update. This step is mostly meant to reflect in order to help your future self fix the error better. Do not provide entirely new code but provide suggestions on how to fix the bug using LINE EDITS."
             elif os.path.exists("submission.csv"):
                 self.prev_working_code = copy(self.code_lines)
-                grade_return = get_score(self.plan, "\n".join(self.prev_working_code), code_return, openai_api_key=self.openai_api_key)[0]
+                grade_return = self.get_score(self.plan, "\n".join(self.prev_working_code), code_return, openai_api_key=self.openai_api_key)[0]
                 print(f"@@@@ SUBMISSION: model score {grade_return}", REWARD_MODEL_LLM=self.llm_str)
                 f"Your code was properly submitted and you have just received a grade for your model.\nYour score was {grade_return}.\n\n"
                 reflect_prompt = f"This is your code: {code_str}\n\nYour code successfully returned a submission csv. Consider further improving your technique through advanced learning techniques, data augmentation, or hyperparamter tuning to increase the score. Please provide a detailed reflection on how to improve your performance, which lines in the code could be improved upon, and exactly (line by line) how you hope to improve this in the next update. This step is mostly meant to reflect in order to help your future self."
@@ -570,6 +546,28 @@ class MLESolver:
             return execute_code("\n".join(self.code_lines))
         return "Changes have not yet been made to the code."
 
-
+    def get_score(self, outlined_plan, code, code_return, REWARD_MODEL_LLM, attempts=3, openai_api_key=None):
+        e = str()
+        for _attempt in range(attempts):
+            try:
+                # todo: have a reward function here
+                sys = (
+                    f"You are a professor agent who is serving as an expert reward model that can read a research plan, research code, and code output and are able to determine how well a model followed the plan, built the code, and got the proper output scored from 0 to 1 as a float.\n\n"
+                    f"You must structure your score exactly in the following way: ```SCORE\n<score here>\n``` where SCORE is just the word score, <score here> is a floating point number between 0 and 1 representing how well the model followed the plan, built the code, and got the proper output."
+                )
+                scoring = query_model(
+                    model_str=f"{REWARD_MODEL_LLM}",
+                    system_prompt=sys,
+                    openai_api_key=openai_api_key,
+                    prompt=(
+                        f"Outlined in the following text is the research plan that the machine learning engineer was tasked with building: {outlined_plan}\n\n"
+                        f"The following text is the research code that the model produced: \n{code}\n\n"
+                        f"The following is the output from the model: {code_return}\n\n"), temp=0.6)
+                performance = extract_prompt(text=scoring, word="SCORE")
+                performance = float(performance)
+                return performance, f"The performance of your submission is: {performance}", True
+            except Exception as e:
+                return None, str(e), False
+        return 0, e
 
 
